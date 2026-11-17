@@ -3,74 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Telegram Maps 2GIS</title>
+    <title>Telegram Maps</title>
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://mapgl.2gis.com/api/js/v1"></script>
+    <!-- Возвращаем надежный Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
     <style>
-        /* СБРОС ВСЕХ ОТСТУПОВ И РАЗМЕРОВ */
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body { 
-            width: 100%; 
-            height: 100%; 
-            overflow: hidden; 
-            background-color: #0f172a; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
+        html, body { width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         
-        /* КОНТЕЙНЕР КАРТЫ - ЖЕСТКО ЗАДАЕМ РАЗМЕРЫ */
-        #map { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100vw; 
-            height: 100vh; 
-            z-index: 1; 
-        }
+        /* Контейнер карты */
+        #map { width: 100vw; height: 100vh; z-index: 1; }
 
-        /* ПАНЕЛЬ УПРАВЛЕНИЯ ПОВЕРХ КАРТЫ */
-        .ui-panel { 
-            position: absolute; 
-            bottom: 20px; 
-            left: 20px; 
-            right: 20px; 
-            z-index: 999; 
-            pointer-events: none; /* Чтобы панель не блокировала клики по карте */
-        }
-        .ui-panel > * { pointer-events: auto; } /* Возвращаем кликабельность самим кнопкам */
+        /* Скрываем флаг и текст атрибуции Leaflet */
+        .leaflet-control-attribution { display: none !important; }
 
-        .glass { 
-            background: rgba(15, 23, 42, 0.85); 
-            backdrop-filter: blur(10px); 
-            border: 1px solid rgba(255,255,255,0.1); 
-            color: white; 
-            border-radius: 16px; 
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5); 
-        }
-
-        /* ПЛАШКА ОШИБОК */
-        #error-box { 
-            position: absolute; 
-            top: 10px; 
-            left: 10px; 
-            right: 10px; 
-            z-index: 10000; 
-            display: none; 
-            background: rgba(220, 38, 38, 0.95); 
-            color: white; 
-            padding: 12px; 
-            border-radius: 8px; 
-            font-size: 12px; 
-            font-family: monospace; 
-            word-break: break-all;
-        }
+        /* Панель управления */
+        .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
+        .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
     </style>
 </head>
 <body>
 
-    <div id="error-box"></div>
     <div id="map"></div>
 
     <div class="ui-panel">
@@ -87,24 +44,22 @@
         </div>
 
         <div class="glass p-4 flex space-x-2">
-            <button onclick="createRoom()" id="btn-create" class="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-blue-700">
+            <button onclick="createRoom()" id="btn-create" class="bg-blue-600 text-white font-bold py-3 px-4 rounded-xl active:scale-95 transition text-sm flex-1 hover:bg-blue-700">
                 Создать карту
             </button>
-            <button onclick="getMyLocation(true)" class="flex-1 bg-green-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-green-700">
+            <button onclick="getMyLocation(true)" class="bg-green-600 text-white font-bold py-3 px-4 rounded-xl active:scale-95 transition text-sm flex-1 hover:bg-green-700">
                 Где я? 📍
             </button>
         </div>
     </div>
 
     <script>
-        // 1. ИНИЦИАЛИЗАЦИЯ TELEGRAM
         const tg = window.Telegram.WebApp; 
         tg.expand(); 
         tg.ready();
         
         const userId = tg.initDataUnsafe?.user?.id || 0;
         const firstName = tg.initDataUnsafe?.user?.first_name || "Друг";
-        const YOUR_2GIS_KEY = 'd2113ce9-d6f2-4930-91d5-b1a57cf1a99b'; 
 
         let map;
         let myMarker = null;
@@ -114,67 +69,19 @@
         let locationInterval = null;
         let friendsInterval = null;
 
-        function showError(msg) {
-            const box = document.getElementById('error-box');
-            box.style.display = 'block';
-            box.innerText = "ОШИБКА: " + msg;
-            console.error(msg);
-        }
+        // --- ИНИЦИАЛИЗАЦИЯ КАРТЫ ---
+        // Начальный центр - Казань
+        map = L.map('map', { zoomControl: false }).setView([55.796127, 49.106405], 13);
 
-        // 2. ЗАГРУЗКА КАРТЫ ПОСЛЕ ПОЛНОЙ ЗАГРУЗКИ DOM
-        window.onload = function() {
-            if (typeof mapgl === 'undefined') {
-                showError("Библиотека 2ГИС не загрузилась. Проверь блокировщики или VPN.");
-                return;
-            }
+        // Подключаем СТИЛЬНУЮ ТЕМНУЮ КАРТУ (CartoDB Dark Matter)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19
+        }).addTo(map);
 
-            // Проверка поддержки WebGL
-            try {
-                const canvas = document.createElement('canvas');
-                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                if (!gl) {
-                    showError("Твой Telegram не поддерживает WebGL (3D-графику). Обнови приложение или используй другое устройство.");
-                    return;
-                }
-            } catch (e) {
-                showError("Ошибка проверки WebGL: " + e.message);
-                return;
-            }
-
-            // Инициализация карты
-            mapgl.load().then((mapgl) => {
-                try {
-                    map = new mapgl.Map('map', {
-                        center: [49.106405, 55.796127], // Казань
-                        zoom: 13,
-                        key: YOUR_2GIS_KEY,
-                    });
-
-                    // ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ РАЗМЕРА (очень важно для Telegram WebApp)
-                    setTimeout(() => {
-                        map.resize();
-                        console.log("Карта инициализирована и растянута");
-                    }, 500);
-
-                    map.on('render', () => {
-                        document.getElementById('error-box').style.display = 'none';
-                    });
-
-                    map.on('error', (e) => {
-                        showError("2ГИС: " + (e.message || JSON.stringify(e)));
-                    });
-
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const inviteCode = urlParams.get('invite');
-                    if (inviteCode) joinRoom(inviteCode);
-
-                } catch(e) {
-                    showError("Ошибка создания карты: " + e.message);
-                }
-            }).catch(err => {
-                showError("Ошибка загрузки MapGL: " + err.message);
-            });
-        };
+        // Проверяем URL на наличие кода приглашения
+        const urlParams = new URLSearchParams(window.location.search);
+        const inviteCode = urlParams.get('invite');
+        if (inviteCode) joinRoom(inviteCode);
 
         // --- ЛОГИКА КОМНАТ ---
         async function createRoom() {
@@ -193,11 +100,11 @@
                     showRoomInfo();
                     tg.showAlert("Карта создана! Отправь ссылку друзьям.");
                 } else {
-                    showError("Сервер: " + data.error);
+                    tg.showAlert("Ошибка: " + data.error);
                     btn.innerText = "Создать карту";
                 }
             } catch(e) { 
-                showError("Ошибка сети при создании"); 
+                tg.showAlert("Ошибка сети"); 
                 btn.innerText = "Создать карту";
             }
         }
@@ -212,10 +119,10 @@
                     showRoomInfo();
                     tg.showAlert("Ты присоединился к карте друга!");
                 } else {
-                    tg.showAlert("Комната не найдена или устарела.");
+                    tg.showAlert("Комната не найдена.");
                 }
             } catch(e) { 
-                showError("Ошибка сети при входе"); 
+                tg.showAlert("Ошибка сети"); 
             }
         }
 
@@ -223,9 +130,11 @@
             document.getElementById('room-info').classList.remove('hidden');
             document.getElementById('room-code-display').innerText = currentRoomCode;
             document.getElementById('btn-create').style.display = 'none';
+            
             getMyLocation();
             if(locationInterval) clearInterval(locationInterval);
             if(friendsInterval) clearInterval(friendsInterval);
+
             locationInterval = setInterval(getMyLocation, 20000);
             friendsInterval = setInterval(loadFriends, 5000);
             loadFriends();
@@ -234,9 +143,9 @@
         function copyInviteLink() {
             const link = `https://t.me/telegaMaps_bot?start=${currentRoomCode}`;
             navigator.clipboard.writeText(link).then(() => {
-                tg.showAlert("Ссылка скопирована! Отправь её другу.");
+                tg.showAlert("Ссылка скопирована!");
             }).catch(() => {
-                tg.showAlert("Не удалось скопировать. Ссылка: " + link);
+                tg.showAlert("Ссылка: " + link);
             });
         }
 
@@ -247,7 +156,7 @@
                 return;
             }
             if (!tg.LocationManager.isSupported()) {
-                if(manual) tg.showAlert("Твоя версия Telegram не поддерживает геолокацию. Открой на телефоне.");
+                if(manual) tg.showAlert("Твоя версия Telegram не поддерживает геолокацию.");
                 return;
             }
 
@@ -258,21 +167,20 @@
                 }
 
                 tg.LocationManager.getLocation((locationData) => {
-                    if (locationData && map) {
+                    if (locationData) {
                         const lat = locationData.latitude;
                         const lon = locationData.longitude;
-                        const coords = [lon, lat];
-
+                        
                         if (!myMarker) {
-                            myMarker = new mapgl.Marker(map, {
-                                coordinates: coords,
-                                icon: 'https://docs.2gis.com/img/mapgl/marker-blue.png',
-                                size: [30, 30],
-                                anchor: [15, 30]
-                            });
-                            map.setCenter(coords);
+                            myMarker = L.marker([lat, lon], {
+                                icon: L.divIcon({
+                                    className: 'bg-blue-500 rounded-full w-5 h-5 border-2 border-white shadow-lg animate-pulse',
+                                    iconSize: [20, 20]
+                                })
+                            }).addTo(map).bindPopup("Это ты");
+                            map.setView([lat, lon], 15);
                         } else {
-                            myMarker.setCoordinates(coords);
+                            myMarker.setLatLng([lat, lon]);
                         }
 
                         if (currentRoomId) {
@@ -289,32 +197,36 @@
                             }).catch(err => console.log("Ошибка отправки координат", err));
                         }
                     } else if (manual) {
-                        tg.showAlert("Не удалось получить геопозицию. Разреши доступ в настройках.");
+                        tg.showAlert("Не удалось получить геопозицию.");
                     }
                 });
             } catch (error) {
-                showError("Геолокация: " + error.message);
+                console.error(error);
+                if (manual) tg.showAlert("Ошибка: " + error.message);
             }
         }
 
         // --- ЗАГРУЗКА ДРУЗЕЙ ---
         async function loadFriends() {
-            if (!currentRoomId || !map) return;
+            if (!currentRoomId) return;
             try {
                 const res = await fetch(`${window.location.origin}/api/friends?room_id=${currentRoomId}`);
                 const data = await res.json();
+                
                 data.forEach(friend => {
                     if (friend.user_id != userId && friend.latitude && friend.longitude) {
-                        const coords = [parseFloat(friend.longitude), parseFloat(friend.latitude)];
+                        const lat = parseFloat(friend.latitude);
+                        const lon = parseFloat(friend.longitude);
+                        
                         if (friendMarkers[friend.user_id]) {
-                            friendMarkers[friend.user_id].setCoordinates(coords);
+                            friendMarkers[friend.user_id].setLatLng([lat, lon]);
                         } else {
-                            friendMarkers[friend.user_id] = new mapgl.Marker(map, {
-                                coordinates: coords,
-                                icon: 'https://docs.2gis.com/img/mapgl/marker-green.png',
-                                size: [25, 25],
-                                anchor: [12.5, 25]
-                            });
+                            friendMarkers[friend.user_id] = L.marker([lat, lon], {
+                                icon: L.divIcon({
+                                    className: 'bg-green-500 rounded-full w-4 h-4 border-2 border-white',
+                                    iconSize: [16, 16]
+                                })
+                            }).addTo(map).bindPopup(friend.first_name);
                         }
                     }
                 });

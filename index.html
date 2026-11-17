@@ -15,6 +15,9 @@
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
         #map { width: 100vw; height: 100vh; z-index: 1; }
         
+        /* Скрываем флаг и текст атрибуции Leaflet, чтобы не мешал */
+        .leaflet-control-attribution { display: none !important; }
+
         /* Панель управления поверх карты */
         .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
         .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
@@ -74,8 +77,7 @@
 
         // Добавляем слой карты (OpenStreetMap)
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '© OpenStreetMap'
+            maxZoom: 19
         }).addTo(map);
 
         // Проверяем URL на наличие кода приглашения (?invite=xxxxxx)
@@ -153,7 +155,7 @@
             loadFriends(); // Первая загрузка сразу
         }
 
-        // Копирование ссылки-приглашения (используем твой юзернейм)
+        // Копирование ссылки-приглашения
         function copyInviteLink() {
             const link = `https://t.me/telegaMaps_bot?start=${currentRoomCode}`;
             navigator.clipboard.writeText(link).then(() => {
@@ -163,15 +165,26 @@
             });
         }
 
-        // --- ГЕОЛОКАЦИЯ ---
+        // --- ГЕОЛОКАЦИЯ (ИСПРАВЛЕННАЯ) ---
 
-        function getMyLocation(manual = false) {
-            if (!tg.LocationManager) {
+        async function getMyLocation(manual = false) {
+            // 1. Проверяем, поддерживает ли текущая версия Telegram геолокацию
+            if (!tg.LocationManager || !tg.LocationManager.isSupported) {
                 if(manual) tg.showAlert("Геолокация не поддерживается в этой версии Telegram");
                 return;
             }
 
-            tg.LocationManager.init(() => {
+            try {
+                // 2. Асинхронно подключаем менеджер локаций (обязательный шаг)
+                await tg.LocationManager.mount();
+                
+                // 3. Проверяем, дал ли пользователь разрешение
+                if (!tg.LocationManager.isAccessGranted) {
+                    // Если нет, просим его через нативный интерфейс
+                    await tg.LocationManager.requestLocation();
+                }
+
+                // 4. Запрашиваем координаты
                 tg.LocationManager.getLocation((locationData) => {
                     if (locationData) {
                         const lat = locationData.latitude;
@@ -210,7 +223,12 @@
                         tg.showAlert("Не удалось получить геопозицию. Разреши доступ в настройках.");
                     }
                 });
-            });
+            } catch (error) {
+                console.error("Ошибка LocationManager:", error);
+                if (manual) {
+                    tg.showAlert("Ошибка геолокации. Попробуй перезапустить приложение.");
+                }
+            }
         }
 
         // --- ЗАГРУЗКА ДРУЗЕЙ ---

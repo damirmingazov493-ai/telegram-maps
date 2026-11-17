@@ -6,20 +6,66 @@
     <title>Telegram Maps 2GIS</title>
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Подключаем 2ГИС MapGL API -->
     <script src="https://mapgl.2gis.com/api/js/v1"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
-        #map { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        /* СБРОС ВСЕХ ОТСТУПОВ И РАЗМЕРОВ */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { 
+            width: 100%; 
+            height: 100%; 
+            overflow: hidden; 
+            background-color: #0f172a; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
         
-        /* Панель управления поверх карты */
-        .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
-        .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-        
-        /* Плашка для ошибок */
-        #error-box { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1000; display: none; background: rgba(220, 38, 38, 0.9); color: white; padding: 12px; border-radius: 8px; font-size: 12px; font-family: monospace; }
+        /* КОНТЕЙНЕР КАРТЫ - ЖЕСТКО ЗАДАЕМ РАЗМЕРЫ */
+        #map { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100vw; 
+            height: 100vh; 
+            z-index: 1; 
+        }
+
+        /* ПАНЕЛЬ УПРАВЛЕНИЯ ПОВЕРХ КАРТЫ */
+        .ui-panel { 
+            position: absolute; 
+            bottom: 20px; 
+            left: 20px; 
+            right: 20px; 
+            z-index: 999; 
+            pointer-events: none; /* Чтобы панель не блокировала клики по карте */
+        }
+        .ui-panel > * { pointer-events: auto; } /* Возвращаем кликабельность самим кнопкам */
+
+        .glass { 
+            background: rgba(15, 23, 42, 0.85); 
+            backdrop-filter: blur(10px); 
+            border: 1px solid rgba(255,255,255,0.1); 
+            color: white; 
+            border-radius: 16px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); 
+        }
+
+        /* ПЛАШКА ОШИБОК */
+        #error-box { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            right: 10px; 
+            z-index: 10000; 
+            display: none; 
+            background: rgba(220, 38, 38, 0.95); 
+            color: white; 
+            padding: 12px; 
+            border-radius: 8px; 
+            font-size: 12px; 
+            font-family: monospace; 
+            word-break: break-all;
+        }
     </style>
 </head>
 <body>
@@ -27,9 +73,7 @@
     <div id="error-box"></div>
     <div id="map"></div>
 
-    <!-- Панель управления -->
     <div class="ui-panel">
-        <!-- Блок с информацией о комнате -->
         <div class="glass p-4 mb-3 hidden" id="room-info">
             <div class="flex justify-between items-center">
                 <div>
@@ -42,7 +86,6 @@
             </div>
         </div>
 
-        <!-- Кнопки управления -->
         <div class="glass p-4 flex space-x-2">
             <button onclick="createRoom()" id="btn-create" class="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-blue-700">
                 Создать карту
@@ -54,14 +97,13 @@
     </div>
 
     <script>
+        // 1. ИНИЦИАЛИЗАЦИЯ TELEGRAM
         const tg = window.Telegram.WebApp; 
         tg.expand(); 
         tg.ready();
         
         const userId = tg.initDataUnsafe?.user?.id || 0;
         const firstName = tg.initDataUnsafe?.user?.first_name || "Друг";
-
-        // Твой ключ 2ГИС
         const YOUR_2GIS_KEY = 'd2113ce9-d6f2-4930-91d5-b1a57cf1a99b'; 
 
         let map;
@@ -72,7 +114,6 @@
         let locationInterval = null;
         let friendsInterval = null;
 
-        // Показываем ошибку на экране (если что-то пойдет не так)
         function showError(msg) {
             const box = document.getElementById('error-box');
             box.style.display = 'block';
@@ -80,19 +121,41 @@
             console.error(msg);
         }
 
-        // Инициализация карты 2ГИС
-        if (typeof mapgl === 'undefined') {
-            showError("Библиотека 2ГИС не загрузилась. Проверь интернет.");
-        } else {
+        // 2. ЗАГРУЗКА КАРТЫ ПОСЛЕ ПОЛНОЙ ЗАГРУЗКИ DOM
+        window.onload = function() {
+            if (typeof mapgl === 'undefined') {
+                showError("Библиотека 2ГИС не загрузилась. Проверь блокировщики или VPN.");
+                return;
+            }
+
+            // Проверка поддержки WebGL
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (!gl) {
+                    showError("Твой Telegram не поддерживает WebGL (3D-графику). Обнови приложение или используй другое устройство.");
+                    return;
+                }
+            } catch (e) {
+                showError("Ошибка проверки WebGL: " + e.message);
+                return;
+            }
+
+            // Инициализация карты
             mapgl.load().then((mapgl) => {
                 try {
                     map = new mapgl.Map('map', {
-                        center: [49.106405, 55.796127], // Казань [долгота, широта]
+                        center: [49.106405, 55.796127], // Казань
                         zoom: 13,
                         key: YOUR_2GIS_KEY,
                     });
 
-                    // Скрываем плашку ошибки, если карта загрузилась
+                    // ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ РАЗМЕРА (очень важно для Telegram WebApp)
+                    setTimeout(() => {
+                        map.resize();
+                        console.log("Карта инициализирована и растянута");
+                    }, 500);
+
                     map.on('render', () => {
                         document.getElementById('error-box').style.display = 'none';
                     });
@@ -101,12 +164,9 @@
                         showError("2ГИС: " + (e.message || JSON.stringify(e)));
                     });
 
-                    // Проверяем URL на наличие кода приглашения
                     const urlParams = new URLSearchParams(window.location.search);
                     const inviteCode = urlParams.get('invite');
-                    if (inviteCode) {
-                        joinRoom(inviteCode);
-                    }
+                    if (inviteCode) joinRoom(inviteCode);
 
                 } catch(e) {
                     showError("Ошибка создания карты: " + e.message);
@@ -114,7 +174,7 @@
             }).catch(err => {
                 showError("Ошибка загрузки MapGL: " + err.message);
             });
-        }
+        };
 
         // --- ЛОГИКА КОМНАТ ---
         async function createRoom() {
@@ -163,12 +223,9 @@
             document.getElementById('room-info').classList.remove('hidden');
             document.getElementById('room-code-display').innerText = currentRoomCode;
             document.getElementById('btn-create').style.display = 'none';
-            
             getMyLocation();
-            
             if(locationInterval) clearInterval(locationInterval);
             if(friendsInterval) clearInterval(friendsInterval);
-
             locationInterval = setInterval(getMyLocation, 20000);
             friendsInterval = setInterval(loadFriends, 5000);
             loadFriends();
@@ -204,8 +261,6 @@
                     if (locationData && map) {
                         const lat = locationData.latitude;
                         const lon = locationData.longitude;
-                        
-                        // В 2ГИС порядок: [Долгота, Широта]
                         const coords = [lon, lat];
 
                         if (!myMarker) {
@@ -248,12 +303,9 @@
             try {
                 const res = await fetch(`${window.location.origin}/api/friends?room_id=${currentRoomId}`);
                 const data = await res.json();
-                
                 data.forEach(friend => {
                     if (friend.user_id != userId && friend.latitude && friend.longitude) {
-                        // Переводим в формат 2ГИС: [Долгота, Широта]
                         const coords = [parseFloat(friend.longitude), parseFloat(friend.latitude)];
-                        
                         if (friendMarkers[friend.user_id]) {
                             friendMarkers[friend.user_id].setCoordinates(coords);
                         } else {

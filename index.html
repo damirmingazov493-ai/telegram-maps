@@ -6,26 +6,30 @@
     <title>Telegram Maps 2GIS</title>
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Подключаем 2GIS MapGL API -->
+    <!-- Подключаем 2ГИС MapGL API -->
     <script src="https://mapgl.2gis.com/api/js/v1"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
-        #map { width: 100vw; height: 100vh; }
+        #map { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         
         /* Панель управления поверх карты */
         .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
         .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        
+        /* Плашка для ошибок */
+        #error-box { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1000; display: none; background: rgba(220, 38, 38, 0.9); color: white; padding: 12px; border-radius: 8px; font-size: 12px; font-family: monospace; }
     </style>
 </head>
 <body>
 
-    <!-- Контейнер для карты 2ГИС -->
+    <div id="error-box"></div>
     <div id="map"></div>
 
     <!-- Панель управления -->
     <div class="ui-panel">
+        <!-- Блок с информацией о комнате -->
         <div class="glass p-4 mb-3 hidden" id="room-info">
             <div class="flex justify-between items-center">
                 <div>
@@ -38,6 +42,7 @@
             </div>
         </div>
 
+        <!-- Кнопки управления -->
         <div class="glass p-4 flex space-x-2">
             <button onclick="createRoom()" id="btn-create" class="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-blue-700">
                 Создать карту
@@ -56,7 +61,7 @@
         const userId = tg.initDataUnsafe?.user?.id || 0;
         const firstName = tg.initDataUnsafe?.user?.first_name || "Друг";
 
-        // --- НАСТРОЙКИ 2ГИС ---
+        // Твой ключ 2ГИС
         const YOUR_2GIS_KEY = 'd2113ce9-d6f2-4930-91d5-b1a57cf1a99b'; 
 
         let map;
@@ -67,23 +72,49 @@
         let locationInterval = null;
         let friendsInterval = null;
 
-        // Инициализация карты 2ГИС (центр - Казань)
-        // В 2ГИС порядок координат: [Долгота, Широта]
-        // Казань: Широта 55.796127, Долгота 49.106405
-        mapgl.load().then((mapgl) => {
-            map = new mapgl.Map('map', {
-                center: [49.106405, 55.796127], 
-                zoom: 13,
-                key: YOUR_2GIS_KEY,
-            });
+        // Показываем ошибку на экране (если что-то пойдет не так)
+        function showError(msg) {
+            const box = document.getElementById('error-box');
+            box.style.display = 'block';
+            box.innerText = "ОШИБКА: " + msg;
+            console.error(msg);
+        }
 
-            // Проверяем URL на наличие кода приглашения
-            const urlParams = new URLSearchParams(window.location.search);
-            const inviteCode = urlParams.get('invite');
-            if (inviteCode) {
-                joinRoom(inviteCode);
-            }
-        });
+        // Инициализация карты 2ГИС
+        if (typeof mapgl === 'undefined') {
+            showError("Библиотека 2ГИС не загрузилась. Проверь интернет.");
+        } else {
+            mapgl.load().then((mapgl) => {
+                try {
+                    map = new mapgl.Map('map', {
+                        center: [49.106405, 55.796127], // Казань [долгота, широта]
+                        zoom: 13,
+                        key: YOUR_2GIS_KEY,
+                    });
+
+                    // Скрываем плашку ошибки, если карта загрузилась
+                    map.on('render', () => {
+                        document.getElementById('error-box').style.display = 'none';
+                    });
+
+                    map.on('error', (e) => {
+                        showError("2ГИС: " + (e.message || JSON.stringify(e)));
+                    });
+
+                    // Проверяем URL на наличие кода приглашения
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const inviteCode = urlParams.get('invite');
+                    if (inviteCode) {
+                        joinRoom(inviteCode);
+                    }
+
+                } catch(e) {
+                    showError("Ошибка создания карты: " + e.message);
+                }
+            }).catch(err => {
+                showError("Ошибка загрузки MapGL: " + err.message);
+            });
+        }
 
         // --- ЛОГИКА КОМНАТ ---
         async function createRoom() {
@@ -102,11 +133,11 @@
                     showRoomInfo();
                     tg.showAlert("Карта создана! Отправь ссылку друзьям.");
                 } else {
-                    tg.showAlert("Ошибка: " + (data.error || "Неизвестно"));
+                    showError("Сервер: " + data.error);
                     btn.innerText = "Создать карту";
                 }
             } catch(e) { 
-                tg.showAlert("Ошибка сети"); 
+                showError("Ошибка сети при создании"); 
                 btn.innerText = "Создать карту";
             }
         }
@@ -124,7 +155,7 @@
                     tg.showAlert("Комната не найдена или устарела.");
                 }
             } catch(e) { 
-                tg.showAlert("Ошибка входа"); 
+                showError("Ошибка сети при входе"); 
             }
         }
 
@@ -170,18 +201,17 @@
                 }
 
                 tg.LocationManager.getLocation((locationData) => {
-                    if (locationData) {
+                    if (locationData && map) {
                         const lat = locationData.latitude;
                         const lon = locationData.longitude;
                         
-                        // В 2ГИС координаты: [lon, lat]
+                        // В 2ГИС порядок: [Долгота, Широта]
                         const coords = [lon, lat];
 
                         if (!myMarker) {
-                            // Создаем маркер "Я" (синий)
                             myMarker = new mapgl.Marker(map, {
                                 coordinates: coords,
-                                icon: 'https://docs.2gis.com/img/mapgl/marker-blue.png', // Стандартная иконка
+                                icon: 'https://docs.2gis.com/img/mapgl/marker-blue.png',
                                 size: [30, 30],
                                 anchor: [15, 30]
                             });
@@ -208,26 +238,25 @@
                     }
                 });
             } catch (error) {
-                console.error("Ошибка LocationManager:", error);
-                if (manual) tg.showAlert("Ошибка геолокации. Перезапусти приложение.");
+                showError("Геолокация: " + error.message);
             }
         }
 
         // --- ЗАГРУЗКА ДРУЗЕЙ ---
         async function loadFriends() {
-            if (!currentRoomId) return;
+            if (!currentRoomId || !map) return;
             try {
                 const res = await fetch(`${window.location.origin}/api/friends?room_id=${currentRoomId}`);
                 const data = await res.json();
                 
                 data.forEach(friend => {
                     if (friend.user_id != userId && friend.latitude && friend.longitude) {
+                        // Переводим в формат 2ГИС: [Долгота, Широта]
                         const coords = [parseFloat(friend.longitude), parseFloat(friend.latitude)];
                         
                         if (friendMarkers[friend.user_id]) {
                             friendMarkers[friend.user_id].setCoordinates(coords);
                         } else {
-                            // Создаем маркер друга (зеленый)
                             friendMarkers[friend.user_id] = new mapgl.Marker(map, {
                                 coordinates: coords,
                                 icon: 'https://docs.2gis.com/img/mapgl/marker-green.png',

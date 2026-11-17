@@ -15,7 +15,7 @@
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
         #map { width: 100vw; height: 100vh; z-index: 1; }
         
-        /* Скрываем флаг и текст атрибуции Leaflet, чтобы не мешал */
+        /* Скрываем флаг и текст атрибуции Leaflet */
         .leaflet-control-attribution { display: none !important; }
 
         /* Панель управления поверх карты */
@@ -30,7 +30,7 @@
 
     <!-- Панель управления -->
     <div class="ui-panel">
-        <!-- Блок с информацией о комнате (появляется после создания/входа) -->
+        <!-- Блок с информацией о комнате -->
         <div class="glass p-4 mb-3 hidden" id="room-info">
             <div class="flex justify-between items-center">
                 <div>
@@ -90,7 +90,6 @@
 
         // --- ЛОГИКА КОМНАТ ---
 
-        // Создание новой комнаты
         async function createRoom() {
             const btn = document.getElementById('btn-create');
             btn.innerText = "Создание...";
@@ -118,7 +117,6 @@
             }
         }
 
-        // Вход в комнату по коду
         async function joinRoom(code) {
             try {
                 const res = await fetch(`${window.location.origin}/api/join_room?code=${code}`);
@@ -137,7 +135,6 @@
             }
         }
 
-        // Отображение панели комнаты и запуск трекинга
         function showRoomInfo() {
             document.getElementById('room-info').classList.remove('hidden');
             document.getElementById('room-code-display').innerText = currentRoomCode;
@@ -146,16 +143,14 @@
             // Сразу запрашиваем локацию и запускаем интервалы
             getMyLocation();
             
-            // Очищаем старые интервалы (если были), чтобы не дублировать
             if(locationInterval) clearInterval(locationInterval);
             if(friendsInterval) clearInterval(friendsInterval);
 
-            locationInterval = setInterval(getMyLocation, 20000); // Отправляем свои координаты каждые 20 сек
-            friendsInterval = setInterval(loadFriends, 5000);     // Загружаем друзей каждые 5 сек
-            loadFriends(); // Первая загрузка сразу
+            locationInterval = setInterval(getMyLocation, 20000); // Свои координаты каждые 20 сек
+            friendsInterval = setInterval(loadFriends, 5000);     // Друзья каждые 5 сек
+            loadFriends();
         }
 
-        // Копирование ссылки-приглашения
         function copyInviteLink() {
             const link = `https://t.me/telegaMaps_bot?start=${currentRoomCode}`;
             navigator.clipboard.writeText(link).then(() => {
@@ -165,32 +160,37 @@
             });
         }
 
-        // --- ГЕОЛОКАЦИЯ (ИСПРАВЛЕННАЯ) ---
+        // --- ГЕОЛОКАЦИЯ (ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
 
         async function getMyLocation(manual = false) {
-            // 1. Проверяем, поддерживает ли текущая версия Telegram геолокацию
-            if (!tg.LocationManager || !tg.LocationManager.isSupported) {
-                if(manual) tg.showAlert("Геолокация не поддерживается в этой версии Telegram");
+            // 1. Проверяем наличие менеджера и то, что isSupported - это функция
+            if (!tg.LocationManager || typeof tg.LocationManager.isSupported !== 'function') {
+                if(manual) tg.showAlert("Геолокация недоступна. Пожалуйста, обнови Telegram.");
+                return;
+            }
+
+            // 2. Вызываем isSupported() как функцию
+            if (!tg.LocationManager.isSupported()) {
+                if(manual) tg.showAlert("Твоя версия Telegram не поддерживает геолокацию. Открой приложение на телефоне (Android/iOS) или обнови Telegram.");
                 return;
             }
 
             try {
-                // 2. Асинхронно подключаем менеджер локаций (обязательный шаг)
+                // 3. Подключаем менеджер
                 await tg.LocationManager.mount();
                 
-                // 3. Проверяем, дал ли пользователь разрешение
+                // 4. Проверяем разрешение
                 if (!tg.LocationManager.isAccessGranted) {
-                    // Если нет, просим его через нативный интерфейс
                     await tg.LocationManager.requestLocation();
                 }
 
-                // 4. Запрашиваем координаты
+                // 5. Получаем координаты
                 tg.LocationManager.getLocation((locationData) => {
                     if (locationData) {
                         const lat = locationData.latitude;
                         const lon = locationData.longitude;
                         
-                        // Ставим или двигаем синий маркер "Я"
+                        // Ставим или двигаем маркер
                         if (!myMarker) {
                             myMarker = L.marker([lat, lon], {
                                 icon: L.divIcon({
@@ -199,13 +199,12 @@
                                 })
                             }).addTo(map).bindPopup("Это ты");
                             
-                            // Центрируем карту на пользователе при первом получении
                             map.setView([lat, lon], 15);
                         } else {
                             myMarker.setLatLng([lat, lon]);
                         }
 
-                        // Отправляем на сервер, если мы в комнате
+                        // Отправляем на сервер
                         if (currentRoomId) {
                             fetch(`${window.location.origin}/api/location`, {
                                 method: 'POST',
@@ -241,16 +240,13 @@
                 const data = await res.json();
                 
                 data.forEach(friend => {
-                    // Не рисуем себя и проверяем наличие координат
                     if (friend.user_id != userId && friend.latitude && friend.longitude) {
                         const lat = parseFloat(friend.latitude);
                         const lon = parseFloat(friend.longitude);
                         
                         if (friendMarkers[friend.user_id]) {
-                            // Если маркер уже есть, просто двигаем
                             friendMarkers[friend.user_id].setLatLng([lat, lon]);
                         } else {
-                            // Если нет - создаем зеленый маркер
                             friendMarkers[friend.user_id] = L.marker([lat, lon], {
                                 icon: L.divIcon({
                                     className: 'bg-green-500 rounded-full w-4 h-4 border-2 border-white',

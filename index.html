@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Telegram Maps</title>
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Библиотека Leaflet для карт -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
+        #map { width: 100vw; height: 100vh; z-index: 1; }
+        
+        /* Панель управления поверх карты */
+        .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
+        .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+    </style>
+</head>
+<body>
+
+    <!-- Сама карта -->
+    <div id="map"></div>
+
+    <!-- Панель управления -->
+    <div class="ui-panel">
+        <!-- Блок с информацией о комнате (появляется после создания/входа) -->
+        <div class="glass p-4 mb-3 hidden" id="room-info">
+            <div class="flex justify-between items-center">
+                <div>
+                    <div class="text-xs text-slate-400">Твоя комната</div>
+                    <div class="font-bold text-lg text-white" id="room-code-display">-</div>
+                </div>
+                <button onclick="copyInviteLink()" class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-bold active:scale-95 transition hover:bg-blue-700">
+                    Пригласить 🔗
+                </button>
+            </div>
+        </div>
+
+        <!-- Кнопки управления -->
+        <div class="glass p-4 flex space-x-2">
+            <button onclick="createRoom()" id="btn-create" class="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-blue-700">
+                Создать карту
+            </button>
+            <button onclick="getMyLocation(true)" class="flex-1 bg-green-600 text-white font-bold py-3 rounded-xl active:scale-95 transition text-sm hover:bg-green-700">
+                Где я? 📍
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Инициализация Telegram WebApp
+        const tg = window.Telegram.WebApp; 
+        tg.expand(); // Разворачиваем на весь экран
+        tg.ready();
+        
+        const userId = tg.initDataUnsafe?.user?.id || 0;
+        const firstName = tg.initDataUnsafe?.user?.first_name || "Друг";
+
+        let map;
+        let myMarker = null;
+        let friendMarkers = {};
+        let currentRoomId = null;
+        let currentRoomCode = null;
+        let locationInterval = null;
+        let friendsInterval = null;
+
+        // --- ИНИЦИАЛИЗАЦИЯ КАРТЫ ---
+        // Начальный центр - Казань (55.796127, 49.106405)
+        map = L.map('map', { zoomControl: false }).setView([55.796127, 49.106405], 12);
+
+        // Добавляем слой карты (OpenStreetMap)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Проверяем URL на наличие кода приглашения (?invite=xxxxxx)
+        const urlParams = new URLSearchParams(window.location.search);
+        const inviteCode = urlParams.get('invite');
+
+        if (inviteCode) {
+            joinRoom(inviteCode);
+        }
+
+        // --- ЛОГИКА КОМНАТ ---
+
+        // Создание новой комнаты
+        async function createRoom() {
+            const btn = document.getElementById('btn-create');
+            btn.innerText = "Создание...";
+            
+            try {
+                const res = await fetch(`${window.location.origin}/api/create_room`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId })
+                });
+                const data = await res.json();
+                
+                if (data.room_id) {
+                    currentRoomId = data.room_id;
+                    currentRoomCode = data.invite_code;
+                    showRoomInfo();
+                    tg.showAlert("Карта создана! Отправь ссылку друзьям.");
+                } else {
+                    tg.showAlert("Ошибка: " + (data.error || "Неизвестно"));
+                    btn.innerText = "Создать карту";
+                }
+            } catch(e) { 
+                tg.showAlert("Ошибка сети"); 
+                btn.innerText = "Создать карту";
+            }
+        }
+
+        // Вход в комнату по коду
+        async function joinRoom(code) {
+            try {
+                const res = await fetch(`${window.location.origin}/api/join_room?code=${code}`);
+                const data = await res.json();
+                
+                if (data.room_id) {
+                    currentRoomId = data.room_id;
+                    currentRoomCode = code;
+                    showRoomInfo();
+                    tg.showAlert("Ты присоединился к карте друга!");
+                } else {
+                    tg.showAlert("Комната не найдена или устарела.");
+                }
+            } catch(e) { 
+                tg.showAlert("Ошибка входа"); 
+            }
+        }
+
+        // Отображение панели комнаты и запуск трекинга
+        function showRoomInfo() {
+            document.getElementById('room-info').classList.remove('hidden');
+            document.getElementById('room-code-display').innerText = currentRoomCode;
+            document.getElementById('btn-create').style.display = 'none';
+            
+            // Сразу запрашиваем локацию и запускаем интервалы
+            getMyLocation();
+            
+            // Очищаем старые интервалы (если были), чтобы не дублировать
+            if(locationInterval) clearInterval(locationInterval);
+            if(friendsInterval) clearInterval(friendsInterval);
+
+            locationInterval = setInterval(getMyLocation, 20000); // Отправляем свои координаты каждые 20 сек
+            friendsInterval = setInterval(loadFriends, 5000);     // Загружаем друзей каждые 5 сек
+            loadFriends(); // Первая загрузка сразу
+        }
+
+        // Копирование ссылки-приглашения (используем твой юзернейм)
+        function copyInviteLink() {
+            const link = `https://t.me/telegaMaps_bot?start=${currentRoomCode}`;
+            navigator.clipboard.writeText(link).then(() => {
+                tg.showAlert("Ссылка скопирована! Отправь её другу.");
+            }).catch(() => {
+                tg.showAlert("Не удалось скопировать. Ссылка: " + link);
+            });
+        }
+
+        // --- ГЕОЛОКАЦИЯ ---
+
+        function getMyLocation(manual = false) {
+            if (!tg.LocationManager) {
+                if(manual) tg.showAlert("Геолокация не поддерживается в этой версии Telegram");
+                return;
+            }
+
+            tg.LocationManager.init(() => {
+                tg.LocationManager.getLocation((locationData) => {
+                    if (locationData) {
+                        const lat = locationData.latitude;
+                        const lon = locationData.longitude;
+                        
+                        // Ставим или двигаем синий маркер "Я"
+                        if (!myMarker) {
+                            myMarker = L.marker([lat, lon], {
+                                icon: L.divIcon({
+                                    className: 'bg-blue-500 rounded-full w-5 h-5 border-2 border-white shadow-lg animate-pulse',
+                                    iconSize: [20, 20]
+                                })
+                            }).addTo(map).bindPopup("Это ты");
+                            
+                            // Центрируем карту на пользователе при первом получении
+                            map.setView([lat, lon], 15);
+                        } else {
+                            myMarker.setLatLng([lat, lon]);
+                        }
+
+                        // Отправляем на сервер, если мы в комнате
+                        if (currentRoomId) {
+                            fetch(`${window.location.origin}/api/location`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    room_id: currentRoomId, 
+                                    user_id: userId, 
+                                    first_name: firstName, 
+                                    latitude: lat, 
+                                    longitude: lon 
+                                })
+                            }).catch(err => console.log("Ошибка отправки координат", err));
+                        }
+                    } else if (manual) {
+                        tg.showAlert("Не удалось получить геопозицию. Разреши доступ в настройках.");
+                    }
+                });
+            });
+        }
+
+        // --- ЗАГРУЗКА ДРУЗЕЙ ---
+
+        async function loadFriends() {
+            if (!currentRoomId) return;
+            
+            try {
+                const res = await fetch(`${window.location.origin}/api/friends?room_id=${currentRoomId}`);
+                const data = await res.json();
+                
+                data.forEach(friend => {
+                    // Не рисуем себя и проверяем наличие координат
+                    if (friend.user_id != userId && friend.latitude && friend.longitude) {
+                        const lat = parseFloat(friend.latitude);
+                        const lon = parseFloat(friend.longitude);
+                        
+                        if (friendMarkers[friend.user_id]) {
+                            // Если маркер уже есть, просто двигаем
+                            friendMarkers[friend.user_id].setLatLng([lat, lon]);
+                        } else {
+                            // Если нет - создаем зеленый маркер
+                            friendMarkers[friend.user_id] = L.marker([lat, lon], {
+                                icon: L.divIcon({
+                                    className: 'bg-green-500 rounded-full w-4 h-4 border-2 border-white',
+                                    iconSize: [16, 16]
+                                })
+                            }).addTo(map).bindPopup(friend.first_name);
+                        }
+                    }
+                });
+            } catch (e) {
+                console.log("Ошибка загрузки друзей", e);
+            }
+        }
+    </script>
+</body>
+</html>

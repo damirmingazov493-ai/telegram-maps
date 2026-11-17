@@ -6,15 +6,16 @@
     <title>Telegram Maps</title>
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Подключаем Яндекс.Карты с ТВОИМ ключом -->
+    <script src="https://api-maps.yandex.ru/2.1/?apikey=300386c0-017c-40b1-a047-3f78ae44f94b&lang=ru_RU" type="text/javascript"></script>
+    
     <script src="https://cdn.tailwindcss.com"></script>
 
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        
         #map { width: 100vw; height: 100vh; z-index: 1; }
-        .leaflet-control-attribution { display: none !important; }
 
         .ui-panel { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 999; }
         .glass { background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
@@ -56,23 +57,31 @@
         const firstName = tg.initDataUnsafe?.user?.first_name || "Друг";
 
         let map;
-        let myMarker = null;
-        let friendMarkers = {};
+        let myPlacemark = null;
+        let friendPlacemarks = {};
         let currentRoomId = null;
         let currentRoomCode = null;
         let locationInterval = null;
         let friendsInterval = null;
 
-        // 1. Светлая карта
-        map = L.map('map', { zoomControl: false }).setView([55.796127, 49.106405], 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19
-        }).addTo(map);
+        // 1. ИНИЦИАЛИЗАЦИЯ КАРТЫ ЯНДЕКС
+        ymaps.ready(init);
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const inviteCode = urlParams.get('invite');
-        if (inviteCode) joinRoom(inviteCode);
+        function init() {
+            // Создаем карту с центром в Казани
+            map = new ymaps.Map("map", {
+                center: [55.796127, 49.106405], // Казань
+                zoom: 13,
+                controls: [] // Убираем лишние элементы управления для чистоты
+            });
 
+            // Проверяем URL на наличие кода приглашения
+            const urlParams = new URLSearchParams(window.location.search);
+            const inviteCode = urlParams.get('invite');
+            if (inviteCode) joinRoom(inviteCode);
+        }
+
+        // --- ЛОГИКА КОМНАТ ---
         async function createRoom() {
             const btn = document.getElementById('btn-create');
             btn.innerText = "Создание...";
@@ -84,7 +93,7 @@
                 const data = await res.json();
                 if (data.room_id) {
                     currentRoomId = data.room_id; currentRoomCode = data.invite_code;
-                    showRoomInfo(); tg.showAlert("Карта создана!");
+                    showRoomInfo(); tg.showAlert("Карта создана! Отправь ссылку друзьям.");
                 } else { tg.showAlert("Ошибка: " + data.error); btn.innerText = "Создать карту"; }
             } catch(e) { tg.showAlert("Ошибка сети"); btn.innerText = "Создать карту"; }
         }
@@ -95,7 +104,7 @@
                 const data = await res.json();
                 if (data.room_id) {
                     currentRoomId = data.room_id; currentRoomCode = code;
-                    showRoomInfo(); tg.showAlert("Ты в комнате!");
+                    showRoomInfo(); tg.showAlert("Ты присоединился к карте друга!");
                 } else { tg.showAlert("Комната не найдена."); }
             } catch(e) { tg.showAlert("Ошибка сети"); }
         }
@@ -104,9 +113,12 @@
             document.getElementById('room-info').classList.remove('hidden');
             document.getElementById('room-code-display').innerText = currentRoomCode;
             document.getElementById('btn-create').style.display = 'none';
+            
             getMyLocation();
             if(locationInterval) clearInterval(locationInterval);
             if(friendsInterval) clearInterval(friendsInterval);
+            
+            // Обновляем свою геопозицию каждые 20 сек, а друзей - каждые 5 сек
             locationInterval = setInterval(getMyLocation, 20000);
             friendsInterval = setInterval(loadFriends, 5000);
             loadFriends();
@@ -117,22 +129,24 @@
             navigator.clipboard.writeText(link).then(() => tg.showAlert("Ссылка скопирована!")).catch(() => tg.showAlert("Ссылка: " + link));
         }
 
-        // --- ИСПРАВЛЕННАЯ ГЕОЛОКАЦИЯ ---
+        // --- ГЕОЛОКАЦИЯ (ДВОЙНАЯ ЗАЩИТА) ---
         async function getMyLocation(manual = false) {
+            // Способ 1: Встроенный модуль Telegram
             if (tg.LocationManager && typeof tg.LocationManager.isSupported === 'function' && tg.LocationManager.isSupported()) {
                 try {
                     await tg.LocationManager.mount();
                     if (!tg.LocationManager.isAccessGranted) await tg.LocationManager.requestLocation();
                     
                     tg.LocationManager.getLocation((locationData) => {
-                        if (locationData) updateLocationOnMap(locationData.latitude, locationData.longitude);
+                        if (locationData) {
+                            updateLocationOnMap(locationData.latitude, locationData.longitude);
+                        }
                     });
                     return; 
-                } catch (error) {
-                    console.log("Ошибка Telegram LocationManager, переключаемся на GPS...");
-                }
+                } catch (error) { console.log("Ошибка Telegram, пробуем GPS..."); }
             }
 
+            // Способ 2: GPS телефона (если Telegram подвел)
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
                     (position) => updateLocationOnMap(position.coords.latitude, position.coords.longitude),
@@ -144,41 +158,61 @@
             }
         }
 
+        // Обновление метки на карте
         function updateLocationOnMap(lat, lon) {
-            if (!myMarker) {
-                myMarker = L.marker([lat, lon], {
-                    icon: L.divIcon({ className: 'bg-blue-500 rounded-full w-5 h-5 border-2 border-white shadow-lg animate-pulse', iconSize: [20, 20] })
-                }).addTo(map).bindPopup("Это ты");
-                map.setView([lat, lon], 15);
+            if (!map) return;
+            const coords = [lat, lon];
+
+            if (!myPlacemark) {
+                // Синяя метка "Я"
+                myPlacemark = new ymaps.Placemark(coords, {
+                    hintContent: 'Это ты',
+                }, {
+                    preset: 'islands#blueIcon'
+                });
+                map.geoObjects.add(myPlacemark);
+                map.setCenter(coords, 15, { duration: 300 });
             } else {
-                myMarker.setLatLng([lat, lon]);
+                myPlacemark.geometry.setCoordinates(coords);
             }
 
+            // Отправляем на сервер
             if (currentRoomId) {
                 fetch(`${window.location.origin}/api/location`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ room_id: currentRoomId, user_id: userId, first_name: firstName, latitude: lat, longitude: lon })
-                });
+                }).catch(err => console.log("Ошибка отправки", err));
             }
         }
 
+        // --- ЗАГРУЗКА ДРУЗЕЙ ---
         async function loadFriends() {
-            if (!currentRoomId) return;
+            if (!currentRoomId || !map) return;
             try {
                 const res = await fetch(`${window.location.origin}/api/friends?room_id=${currentRoomId}`);
                 const data = await res.json();
+                
                 data.forEach(friend => {
                     if (friend.user_id != userId && friend.latitude && friend.longitude) {
-                        const lat = parseFloat(friend.latitude); const lon = parseFloat(friend.longitude);
-                        if (friendMarkers[friend.user_id]) { friendMarkers[friend.user_id].setLatLng([lat, lon]); } 
-                        else {
-                            friendMarkers[friend.user_id] = L.marker([lat, lon], {
-                                icon: L.divIcon({ className: 'bg-green-500 rounded-full w-4 h-4 border-2 border-white', iconSize: [16, 16] })
-                            }).addTo(map).bindPopup(friend.first_name);
+                        const coords = [parseFloat(friend.latitude), parseFloat(friend.longitude)];
+                        
+                        if (friendPlacemarks[friend.user_id]) {
+                            // Двигаем существующую метку
+                            friendPlacemarks[friend.user_id].geometry.setCoordinates(coords);
+                        } else {
+                            // Создаем зеленую метку друга
+                            const placemark = new ymaps.Placemark(coords, {
+                                hintContent: friend.first_name,
+                                balloonContent: friend.first_name
+                            }, {
+                                preset: 'islands#greenIcon'
+                            });
+                            map.geoObjects.add(placemark);
+                            friendPlacemarks[friend.user_id] = placemark;
                         }
                     }
                 });
-            } catch (e) {}
+            } catch (e) { console.log("Ошибка загрузки друзей", e); }
         }
     </script>
 </body>
